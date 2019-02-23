@@ -18,9 +18,18 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 	"github.com/pkg/errors"
 	"golang.org/x/image/colornames"
+	"github.com/kelindar/binary"
+	emitter "github.com/emitter-io/go/v2"
 )
 
-// PUB/Sub key for platformer/: KK5EegbRJFWZRGadZhvScBe30q0kz2Tl 
+// PUB/Sub key for platformer/
+const key = "KK5EegbRJFWZRGadZhvScBe30q0kz2Tl"
+
+type gopherUpdate struct {
+	Rect   pixel.Rect
+	Vel    pixel.Vec
+	Ground bool
+}
 
 func loadAnimationSheet(sheetPath, descPath string, frameWidth float64) (sheet pixel.Picture, anims map[string][]pixel.Rect, err error) {
 	// total hack, nicely format the error at the end, so I don't have to type it every time
@@ -269,6 +278,7 @@ again:
 
 func run() {
 	rand.Seed(time.Now().UnixNano())
+	client, _ := emitter.Connect("", func(_ *emitter.Client, _ emitter.Message){ })
 
 	sheet, anims, err := loadAnimationSheet("sheet.png", "sheet.csv", 12)
 	if err != nil {
@@ -298,6 +308,29 @@ func run() {
 		rate:  1.0 / 10,
 		dir:   +1,
 	}
+
+	phys2 := &gopherPhys{
+		gravity:   -512,
+		runSpeed:  64,
+		jumpSpeed: 192,
+		rect:      pixel.R(-6, -7, 6, 7),
+	}
+
+	anim2 := &gopherAnim{
+		sheet: sheet,
+		anims: anims,
+		rate:  1.0 / 10,
+		dir:   +1,
+	}
+
+	client.Subscribe(key, "platformer", func(_ *emitter.Client, msg emitter.Message){
+		var player2 gopherUpdate
+		if err := binary.Unmarshal(msg.Payload(), &player2); err == nil{
+			phys2.rect = player2.Rect
+			phys2.vel = player2.Vel
+			phys2.ground = player2.Ground
+		}
+	})
 
 	// hardcoded level
 	platforms := []platform{
@@ -367,6 +400,16 @@ func run() {
 		phys.update(dt, ctrl, platforms)
 		gol.update(dt)
 		anim.update(dt, phys)
+		anim2.update(dt, phys2)
+
+		// publish of our own physics structure
+		if msg, err := binary.Marshal(&gopherUpdate{
+			Rect: phys.rect,
+			Vel: phys.vel,
+			Ground: phys.ground,
+		}); err == nil{
+			client.Publish(key, "platformer", msg, emitter.WithoutEcho())
+		}
 
 		// draw the scene to the canvas using IMDraw
 		canvas.Clear(colornames.Black)
@@ -376,6 +419,7 @@ func run() {
 		}
 		gol.draw(imd)
 		anim.draw(imd, phys)
+		anim2.draw(imd, phys2)
 		imd.Draw(canvas)
 
 		// stretch the canvas to the window
